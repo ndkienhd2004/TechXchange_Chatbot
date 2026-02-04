@@ -1,0 +1,145 @@
+[
+  {
+    "source_key": "policy:warranty",
+    "title": "Chinh sach bao hanh",
+    "uri": "/policy/warranty",
+    "content": "TechXchange ho tro tiep nhan bao hanh dua tren cam ket cua nguoi ban, bao hanh chinh hang cua nha san xuat va tinh trang san pham tai thoi diem dat hang. San pham moi duoc ap dung bao hanh chinh hang neu co. San pham da qua su dung ap dung theo thoi gian bao hanh duoc hien thi tren trang chi tiet san pham. Khach hang can giu ma don hang, hoa don, serial va phu kien di kem de doi chieu. Bao hanh khong ap dung cho loi do vao nuoc, roi vo, chay no, sua chua trai phep, mat serial hoac su dung sai huong dan. Thoi gian tiep nhan bao hanh thong thuong la 1 den 3 ngay lam viec. Thoi gian xu ly cu the phu thuoc vao nguoi ban, trung tam bao hanh va tinh trang linh kien thay the.",
+    "metadata": {
+      "doc_type": "policy",
+      "category": "warranty",
+      "trust_score": 0.98,
+      "updated_at": "2026-04-01",
+      "source": "internal_docs"
+    }
+  },
+  {
+    "source_key": "policy:return-refund",
+    "title": "Chinh sach doi tra va hoan tien",
+    "uri": "/policy/return-refund",
+    "content": "Khach hang co the yeu cau doi tra hoac hoan tien khi san pham bi hu hong trong van chuyen, khong dung mo ta, thieu phu kien quan trong hoac phat sinh loi ky thuat hop le trong thoi gian cho phep. Loi do van chuyen hoac thieu hang can duoc bao trong 3 ngay ke tu khi nhan don. Loi ky thuat an canh can duoc bao trong 7 ngay neu trang chi tiet san pham khong quy dinh khac. San pham gui tra can bao gom may chinh, phu kien di kem, hoa don va hop neu con giu duoc. Hoan tien duoc xu ly sau khi doi chieu xac nhan van de hop le va khong do nguoi dung gay ra. Thoi gian hoan tien muc tieu la 3 den 7 ngay lam viec tuy theo kenh thanh toan.",
+    "metadata": {
+      "doc_type": "policy",
+      "category": "return-refund",
+      "trust_score": 0.98,
+      "updated_at": "2026-04-01",
+      "source": "internal_docs"
+    }
+  },
+  {
+    "source_key": "policy:payment",
+    "title": "Chinh sach thanh toan",
+    "uri": "/policy/payment",
+    "content": "TechXchange ho tro cac phuong thuc thanh toan duoc cua hang kich hoat, bao gom chuyen khoan ngan hang, cong thanh toan online va thanh toan khi nhan hang neu duoc ho tro. Don hang chi duoc xac nhan sau khi he thong ghi nhan thanh toan thanh cong hoac nguoi ban chap nhan don COD hop le. Voi don tra truoc, khach hang can chuyen dung so tien va dung noi dung ma don hang de tranh cham doi soat. Giao dich loi, trung lap hoac can kiem tra thu cong se duoc doi soat truoc khi xac nhan hoan tien. Uu dai, voucher va tro gia van chuyen chi ap dung khi tat ca dieu kien hop le duoc dap ung tai thoi diem checkout.",
+    "metadata": {
+      "doc_type": "policy",
+      "category": "payment",
+      "trust_score": 0.97,
+      "updated_at": "2026-04-01",
+      "source": "internal_docs"
+    }
+  },
+  {
+    "source_key": "policy:shipping",
+    "title": "Chinh sach giao hang",
+    "uri": "/policy/shipping",
+    "content": "Thoi gian giao hang phu thuoc vao dia chi nhan, vi tri cua hang, nang luc don vi van chuyen va tinh trang san pham. Don hang san sang giao thong thuong duoc ban giao cho don vi van chuyen trong 1 den 2 ngay lam viec sau khi xac nhan. Don co nhieu san pham co the duoc tach thanh nhieu kien neu den tu nhieu cua hang hoac kho khac nhau. Khach hang can kiem tra tinh trang ben ngoai kien hang khi nhan va thong bao ngay neu co dau hieu rach, vo, am uot hoac bi tac dong manh. Phi ship va thoi gian du kien duoc hien thi tai buoc thanh toan dua tren dia chi da chon.",
+    "metadata": {
+      "doc_type": "policy",
+      "category": "shipping",
+      "trust_score": 0.97,
+      "updated_at": "2026-04-01",
+      "source": "internal_docs"
+    }
+  },
+  {
+    "source_key": "policy:cancellation",
+    "title": "Chinh sach huy don",
+    "uri": "/policy/cancellation",
+    "content": "Khach hang co the yeu cau huy don truoc khi nguoi ban xac nhan dong goi hoac ban giao cho don vi van chuyen. Don hang da dong goi, da giao van chuyen hoac duoc chuan bi theo yeu cau rieng co the khong du dieu kien huy truc tiep va se can xu ly theo quy trinh doi tra neu co van de. TechXchange co quyen huy don trong cac truong hop doi soat thanh toan that bai, nghi ngo gian lan, het hang, thong tin dat hang khong hop le hoac gia bi sai do loi he thong. Don thanh toan truoc neu bi huy se duoc hoan tien theo thoi gian xu ly thong thuong.",
+    "metadata": {
+      "doc_type": "policy",
+      "category": "cancellation",
+      "trust_score": 0.96,
+      "updated_at": "2026-04-01",
+      "source": "internal_docs"
+    }
+  },
+  {
+    "source_key": "faq:warranty-check",
+    "title": "FAQ kiem tra dieu kien bao hanh",
+    "uri": "/faq/warranty-check",
+    "content": "De kiem tra dieu kien bao hanh, hay mo trang chi tiet san pham va chi tiet don hang de xem thoi gian bao hanh, don vi bao hanh va yeu cau doi chieu serial. Neu can ho tro them, khach hang gui ma don hang va serial san pham cho bo phan cham soc khach hang de duoc xac nhan.",
+    "metadata": {
+      "doc_type": "faq",
+      "category": "warranty",
+      "trust_score": 0.95,
+      "updated_at": "2026-04-01",
+      "source": "internal_docs"
+    }
+  },
+  {
+    "source_key": "faq:return-window",
+    "title": "FAQ khi nao duoc doi tra",
+    "uri": "/faq/return-window",
+    "content": "Ban co the yeu cau doi tra khi san pham hu hong luc giao den, khong dung mo ta, thieu phu kien quan trong hoac co loi ky thuat hop le trong thoi gian cho phep. Van de van chuyen hoac thieu hang can thong bao som trong 3 ngay. Loi ky thuat an canh can thong bao trong 7 ngay neu san pham khong co quy dinh khac.",
+    "metadata": {
+      "doc_type": "faq",
+      "category": "return-refund",
+      "trust_score": 0.95,
+      "updated_at": "2026-04-01",
+      "source": "internal_docs"
+    }
+  },
+  {
+    "source_key": "faq:refund-time",
+    "title": "FAQ thoi gian hoan tien",
+    "uri": "/faq/refund-time",
+    "content": "Sau khi yeu cau hoan tien duoc phe duyet, he thong thuong xu ly trong 3 den 7 ngay lam viec. Thoi gian tien ve tai khoan co the thay doi theo ngan hang, cong thanh toan va trang thai doi soat giao dich.",
+    "metadata": {
+      "doc_type": "faq",
+      "category": "refund",
+      "trust_score": 0.94,
+      "updated_at": "2026-04-01",
+      "source": "internal_docs"
+    }
+  },
+  {
+    "source_key": "faq:payment-methods",
+    "title": "FAQ phuong thuc thanh toan",
+    "uri": "/faq/payment-methods",
+    "content": "Phuong thuc thanh toan phu thuoc vao cau hinh cua tung cua hang. He thong co the ho tro chuyen khoan, thanh toan online va COD neu duoc kich hoat. Neu don hang cham xac nhan, hay kiem tra lai noi dung chuyen khoan, ma don hang va trang thai doi soat.",
+    "metadata": {
+      "doc_type": "faq",
+      "category": "payment",
+      "trust_score": 0.94,
+      "updated_at": "2026-04-01",
+      "source": "internal_docs"
+    }
+  },
+  {
+    "source_key": "faq:damaged-package",
+    "title": "FAQ kien hang bi hu hong khi giao",
+    "uri": "/faq/damaged-package",
+    "content": "Neu kien hang co dau hieu hu hong, rach, am uot hoac bi mo bat thuong, ban nen chup anh ngay tai thoi diem nhan, giu lai vo hop va thong bao cho bo phan ho tro kem ma don hang. Thong tin nay giup doi soat nhanh voi don vi van chuyen va cua hang.",
+    "metadata": {
+      "doc_type": "faq",
+      "category": "shipping",
+      "trust_score": 0.94,
+      "updated_at": "2026-04-01",
+      "source": "internal_docs"
+    }
+  },
+  {
+    "source_key": "faq:cancel-after-payment",
+    "title": "FAQ huy don sau khi thanh toan",
+    "uri": "/faq/cancel-after-payment",
+    "content": "Don da thanh toan van co the huy neu chua duoc dong goi hoac giao cho don vi van chuyen. Neu don da vao qua trinh giao hang, he thong co the chuyen sang quy trinh doi tra neu phat sinh van de. Don da huy hop le se duoc hoan tien theo thoi gian xu ly thong thuong.",
+    "metadata": {
+      "doc_type": "faq",
+      "category": "cancellation",
+      "trust_score": 0.94,
+      "updated_at": "2026-04-01",
+      "source": "internal_docs"
+    }
+  }
+]

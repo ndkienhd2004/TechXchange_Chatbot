@@ -1,0 +1,92 @@
+# =========================
+# NodeJS Dependencies (nếu có frontend)
+# =========================
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# =========================
+# Environment variables (API keys)
+# =========================
+.env
+.env.*
+.env.local
+.env.*.local
+
+# =========================
+# IDE / Editor files
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# =========================
+# OS junk files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Build outputs
+# =========================
+dist/
+build/
+
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+
+# =========================
+# Temporary files
+# =========================
+tmp/
+temp/
+*.tmp
+
+# =========================
+# Python cache / build
+# =========================
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.pytest_cache/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# =========================
+# Database / Vector store (ChromaDB)
+# =========================
+chroma_db/
+*.db
+*.sqlite
+*.sqlite3
+
+# =========================
+# Dataset (optional: nếu dữ liệu lớn)
+# =========================
+dataset/
+*.csv
+*.jsonl
+*.parquet
+
+# =========================
+# Jupyter Notebook checkpoints (nếu có)
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# Model files (nếu dùng AI models nặng)
+# =========================
+*.pt
+*.pth
+*.onnx
+*.bin
+
+
