@@ -30,6 +30,8 @@ SELECT
     pc.specs AS catalog_specs,
     pc.updated_at AS catalog_updated_at,
     b.name AS brand_name,
+    c.id AS category_id,
+    c.slug AS category_slug,
     c.name AS category_name,
     s.name AS store_name,
     s.city AS store_city,
@@ -62,6 +64,8 @@ SELECT
     pc.specs AS catalog_specs,
     pc.updated_at AS catalog_updated_at,
     b.name AS brand_name,
+    c.id AS category_id,
+    c.slug AS category_slug,
     c.name AS category_name,
     s.name AS store_name,
     s.city AS store_city,
@@ -98,6 +102,48 @@ TOP_SELLING_STOPWORDS = {
     "bestseller",
     "topselling",
     "hang",
+    "may",
+    "tinh",
+    "dien",
+    "thoai",
+    "laptop",
+    "pc",
+    "desktop",
+    "computer",
+}
+
+# Query hints to prioritize product categories for top-selling questions.
+TOP_SELLING_CATEGORY_HINTS: dict[str, list[str]] = {
+    "dien thoai": ["dien thoai", "smartphone", "iphone", "samsung"],
+    "laptop": ["laptop", "notebook"],
+    "may tinh": [
+        "laptop",
+        "cpu",
+        "bo mach chu",
+        "ram",
+        "ssd",
+        "nguon may tinh",
+        "vo case",
+        "card do hoa",
+        "mainboard",
+        "gpu",
+    ],
+    "pc": [
+        "laptop",
+        "cpu",
+        "bo mach chu",
+        "ram",
+        "ssd",
+        "nguon may tinh",
+        "vo case",
+        "card do hoa",
+        "mainboard",
+        "gpu",
+    ],
+    "tai nghe": ["tai nghe", "headphone", "earbuds"],
+    "man hinh": ["man hinh", "monitor"],
+    "chuot": ["chuot", "mouse"],
+    "ban phim": ["ban phim", "keyboard"],
 }
 
 # Generic words ignored for build-pc intent term extraction.
@@ -252,9 +298,12 @@ def _build_product_document(row: dict[str, Any]) -> dict[str, Any]:
         "metadata": {
             "doc_type": "product",
             "category": row.get("category_name") or "unknown",
+            "category_id": row.get("category_id"),
+            "category_slug": str(row.get("category_slug") or "").strip(),
             "brand": row.get("brand_name") or "",
             "store_name": row.get("store_name") or "",
             "product_id": row["product_id"],
+            "price_vnd": int(_to_float(row.get("product_price")) or 0),
             "buyturn": int(row.get("buyturn") or 0),
             "product_status": row.get("product_status") or "",
             "trust_score": 0.93,
@@ -294,6 +343,63 @@ def _extract_product_terms(query: str, limit: int = 4) -> list[str]:
     return terms
 
 
+def _extract_top_selling_category_hints(query: str) -> list[str]:
+    """Extract category-level hints for top-selling intent routing."""
+
+    normalized = _normalize(query)
+    hints: list[str] = []
+    for phrase, mapped_hints in TOP_SELLING_CATEGORY_HINTS.items():
+        if phrase in normalized:
+            for hint in mapped_hints:
+                if hint not in hints:
+                    hints.append(hint)
+    return hints
+
+
+def _derive_device_category(query: str) -> str | None:
+    """Infer explicit device category from user query text."""
+
+    normalized = _normalize(query)
+    collapsed = normalized.replace(" ", "")
+    if any(marker in normalized for marker in ("laptop", "notebook", "macbook", "may tinh xach tay")):
+        return "laptop"
+    if any(marker in normalized for marker in ("dien thoai", "smartphone", "iphone")):
+        return "phone"
+    if any(marker in normalized for marker in ("tablet", "ipad", "may tinh bang")):
+        return "tablet"
+    if any(marker in normalized for marker in ("pc", "desktop", "may tinh de ban")) or "pc" in collapsed:
+        return "pc"
+    return None
+
+
+def _matches_explicit_device_category(row: dict[str, Any], category: str | None) -> bool:
+    """Strictly match row category against requested device class."""
+
+    if not category:
+        return True
+    category_norm = _normalize(
+        " ".join(
+            [
+                str(row.get("category_name") or ""),
+                str(row.get("category_slug") or "").replace("-", " "),
+                str((row.get("metadata") or {}).get("category") or ""),
+                str((row.get("metadata") or {}).get("category_slug") or "").replace("-", " "),
+            ]
+        )
+    )
+    if not category_norm:
+        return False
+    if category == "laptop":
+        return any(token in category_norm for token in ("laptop", "notebook", "macbook", "xach tay"))
+    if category == "phone":
+        return any(token in category_norm for token in ("dien thoai", "smartphone", "iphone", "mobile"))
+    if category == "tablet":
+        return any(token in category_norm for token in ("tablet", "ipad"))
+    if category == "pc":
+        return any(token in category_norm for token in ("pc", "desktop", "may tinh de ban"))
+    return category in category_norm
+
+
 def _extract_build_terms(query: str, limit: int = 5) -> list[str]:
     """Extract limited meaningful terms for build-pc filtering."""
 
@@ -330,6 +436,26 @@ def _matches_terms(row: dict[str, Any], terms: list[str]) -> bool:
         )
     )
     return all(term in text_blob for term in terms)
+
+
+def _matches_any_hint(row: dict[str, Any], hints: list[str]) -> bool:
+    """Check whether a product-like row matches any category hint."""
+
+    if not hints:
+        return True
+    text_blob = _normalize(
+        " ".join(
+            [
+                str(row.get("product_name") or row.get("title") or ""),
+                str(row.get("catalog_name") or ""),
+                str(row.get("product_description") or row.get("content") or ""),
+                str(row.get("catalog_description") or ""),
+                str(row.get("brand_name") or ""),
+                str(row.get("category_name") or (row.get("metadata") or {}).get("category") or ""),
+            ]
+        )
+    )
+    return any(hint in text_blob for hint in hints)
 
 
 def _to_float(value: Any) -> float:
@@ -379,12 +505,14 @@ def _extract_buyturn_from_content(content: str) -> int:
 def _match_pc_role(row: dict[str, Any]) -> str | None:
     """Classify one product row into a PC role using keyword heuristics."""
 
+    slug_text = _normalize(str(row.get("category_slug") or "").replace("-", " "))
     category_text = _normalize(str(row.get("category_name") or ""))
-    if category_text:
-        if any(keyword in category_text for keyword in PC_NON_BUILD_CATEGORY_KEYWORDS):
+    merged_category = f"{category_text} {slug_text}".strip()
+    if merged_category:
+        if any(keyword in merged_category for keyword in PC_NON_BUILD_CATEGORY_KEYWORDS):
             return None
         for role in PC_ROLE_ORDER:
-            if any(keyword in category_text for keyword in PC_ROLE_CATEGORY_KEYWORDS[role]):
+            if any(keyword in merged_category for keyword in PC_ROLE_CATEGORY_KEYWORDS[role]):
                 return role
         # Category exists but is outside known build-PC component groups.
         return None
@@ -393,6 +521,7 @@ def _match_pc_role(row: dict[str, Any]) -> str | None:
         " ".join(
             [
                 str(row.get("category_name") or ""),
+                str(row.get("category_slug") or "").replace("-", " "),
                 str(row.get("product_name") or row.get("title") or ""),
                 str(row.get("product_description") or row.get("content") or ""),
                 str(row.get("catalog_description") or ""),
@@ -548,6 +677,7 @@ def _fetch_kb_product_rows() -> list[dict[str, Any]]:
                 "product_id": product_id,
                 "product_name": chunk.get("title"),
                 "category_name": metadata.get("category"),
+                "category_slug": metadata.get("category_slug"),
                 "brand_name": metadata.get("brand"),
                 "buyturn": int(
                     _to_float(metadata.get("buyturn"))
@@ -615,11 +745,53 @@ def _to_top_selling_candidate(
     }
 
 
+def _pick_preferred_product_chunk(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    """Pick one representative KB chunk for a product, preferring chunk 1 and richer metadata."""
+
+    def _sort_key(item: dict[str, Any]) -> tuple[int, int, int]:
+        metadata = dict(item.get("metadata") or {})
+        has_price = 1 if int(metadata.get("price_vnd") or 0) > 0 else 0
+        chunk_index = int(item.get("chunk_index") or 9999)
+        content_len = len(str(item.get("content") or ""))
+        return (has_price, -chunk_index, content_len)
+
+    return sorted(candidates, key=_sort_key, reverse=True)[0]
+
+
+def _collapse_kb_product_chunks(product_chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse multiple KB chunks of the same product into one representative row."""
+
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for row in product_chunks:
+        metadata = dict(row.get("metadata") or {})
+        product_id = int(metadata.get("product_id") or row.get("product_id") or 0)
+        if product_id <= 0:
+            product_match = re.search(r"/products/(\d+)", str(row.get("uri") or ""))
+            if product_match:
+                product_id = int(product_match.group(1))
+        if product_id <= 0:
+            continue
+        metadata["product_id"] = product_id
+        row["metadata"] = metadata
+        row["product_id"] = product_id
+        grouped.setdefault(product_id, []).append(row)
+
+    collapsed: list[dict[str, Any]] = []
+    for product_id, rows in grouped.items():
+        representative = dict(_pick_preferred_product_chunk(rows))
+        representative["product_id"] = product_id
+        representative["chunk_id"] = str(representative.get("chunk_id") or f"product:{product_id}:representative")
+        collapsed.append(representative)
+    return collapsed
+
+
 def get_top_selling_candidates(query: str, limit: int = 12) -> dict[str, Any]:
     """Return top-selling product candidates (source DB first, KB fallback)."""
 
     capped_limit = max(1, min(int(limit), 50))
     terms = _extract_product_terms(query)
+    category_hints = _extract_top_selling_category_hints(query)
+    explicit_category = _derive_device_category(query)
 
     if source_engine is not None:
         try:
@@ -629,7 +801,15 @@ def get_top_selling_candidates(query: str, limit: int = 12) -> dict[str, Any]:
                     {"limit": max(capped_limit * 6, 30)},
                 ).mappings().all()
             mapped_rows = [dict(row) for row in rows]
-            filtered_rows = [row for row in mapped_rows if _matches_terms(row, terms)]
+            if explicit_category:
+                hinted_rows = [row for row in mapped_rows if _matches_explicit_device_category(row, explicit_category)]
+            else:
+                hinted_rows = [row for row in mapped_rows if _matches_any_hint(row, category_hints)]
+            if not hinted_rows:
+                hinted_rows = mapped_rows
+            filtered_rows = [row for row in hinted_rows if _matches_terms(row, terms)]
+            if not filtered_rows:
+                filtered_rows = hinted_rows
             if filtered_rows:
                 max_buyturn = max(int(row.get("buyturn") or 0) for row in filtered_rows)
                 candidates = []
@@ -640,6 +820,8 @@ def get_top_selling_candidates(query: str, limit: int = 12) -> dict[str, Any]:
                             "chunk_id": f"top_selling:product:{int(row['product_id'])}",
                             "chunk_index": 1,
                             "buyturn": int(row.get("buyturn") or 0),
+                            "product_rating": row.get("product_rating"),
+                            "product_price": row.get("product_price"),
                         }
                     )
                     candidates.append(
@@ -685,9 +867,34 @@ def get_top_selling_candidates(query: str, limit: int = 12) -> dict[str, Any]:
             if product_match:
                 row["product_id"] = int(product_match.group(1))
 
+    product_rows = _collapse_kb_product_chunks(product_chunks)
+
+    if explicit_category:
+        filtered_chunks = [
+            row for row in product_rows if _matches_explicit_device_category(row, explicit_category)
+        ]
+    else:
+        filtered_chunks = [
+            row
+            for row in product_rows
+            if _matches_any_hint(
+                {
+                    "product_name": row.get("title"),
+                    "catalog_name": "",
+                    "product_description": row.get("content"),
+                    "catalog_description": "",
+                    "brand_name": (row.get("metadata") or {}).get("brand"),
+                    "category_name": (row.get("metadata") or {}).get("category"),
+                },
+                category_hints,
+            )
+        ]
+    if not filtered_chunks:
+        filtered_chunks = product_rows
+
     filtered_chunks = [
         row
-        for row in product_chunks
+        for row in filtered_chunks
         if _matches_terms(
             {
                 "product_name": row.get("title"),
@@ -700,6 +907,24 @@ def get_top_selling_candidates(query: str, limit: int = 12) -> dict[str, Any]:
             terms,
         )
     ]
+    if not filtered_chunks:
+        filtered_chunks = [
+            row
+            for row in product_rows
+            if _matches_any_hint(
+                {
+                    "product_name": row.get("title"),
+                    "catalog_name": "",
+                    "product_description": row.get("content"),
+                    "catalog_description": "",
+                    "brand_name": (row.get("metadata") or {}).get("brand"),
+                    "category_name": (row.get("metadata") or {}).get("category"),
+                },
+                category_hints,
+            )
+    ]
+    if not filtered_chunks:
+        filtered_chunks = product_rows
     sorted_chunks = sorted(
         filtered_chunks,
         key=lambda item: int(item.get("buyturn") or 0),
@@ -719,6 +944,161 @@ def get_top_selling_candidates(query: str, limit: int = 12) -> dict[str, Any]:
         "vector_candidates": len(fallback_candidates),
         "keyword_candidates": 0,
         "candidates": fallback_candidates,
+    }
+
+
+def get_product_search_candidates(
+    query: str,
+    category: str,
+    budget_vnd: int | None = None,
+    budget_mode: str | None = None,
+    limit: int = 12,
+) -> dict[str, Any]:
+    """Return distinct product candidates for shopping search by category and optional budget."""
+
+    capped_limit = max(1, min(int(limit), 50))
+    terms = _extract_product_terms(query)
+    category_hints = _extract_top_selling_category_hints(query)
+    explicit_category = category or _derive_device_category(query)
+    if not category_hints and explicit_category:
+        category_hints = [explicit_category]
+
+    def _price_matches(row: dict[str, Any]) -> bool:
+        if not budget_vnd or budget_vnd <= 0:
+            return True
+        try:
+            price = int(float(row.get("product_price") or row.get("price_vnd") or 0))
+        except (TypeError, ValueError):
+            price = 0
+        if price <= 0:
+            return True
+        mode = str(budget_mode or "").strip().lower() or "upper"
+        if mode == "lower":
+            return price >= budget_vnd
+        return price <= budget_vnd
+
+    if source_engine is not None:
+        try:
+            with source_engine.connect() as connection:
+                rows = connection.execute(
+                    text(PRODUCT_SYNC_QUERY),
+                ).mappings().all()
+            mapped_rows = [dict(row) for row in rows]
+            if explicit_category:
+                hinted_rows = [row for row in mapped_rows if _matches_explicit_device_category(row, explicit_category)]
+            else:
+                hinted_rows = [row for row in mapped_rows if _matches_any_hint(row, category_hints)]
+            if not hinted_rows:
+                hinted_rows = mapped_rows
+            filtered_rows = [row for row in hinted_rows if _matches_terms(row, terms)]
+            if not filtered_rows:
+                filtered_rows = hinted_rows
+            filtered_rows = [row for row in filtered_rows if _price_matches(row)]
+            filtered_rows = sorted(
+                filtered_rows,
+                key=lambda row: (
+                    int(row.get("buyturn") or 0),
+                    float(row.get("product_rating") or 0.0),
+                ),
+                reverse=True,
+            )
+            if filtered_rows:
+                max_buyturn = max(int(row.get("buyturn") or 0) for row in filtered_rows)
+                candidates = []
+                for row in filtered_rows[:capped_limit]:
+                    document = _build_product_document(row)
+                    document.update(
+                        {
+                            "chunk_id": f"product_search:product:{int(row['product_id'])}",
+                            "chunk_index": 1,
+                            "buyturn": int(row.get("buyturn") or 0),
+                            "product_rating": row.get("product_rating"),
+                            "product_price": row.get("product_price"),
+                        }
+                    )
+                    candidates.append(
+                        _to_top_selling_candidate(
+                            document,
+                            max_buyturn=max_buyturn,
+                            source="source_db_product_search",
+                        )
+                    )
+                return {
+                    "retrieval_backend": "source_sql_product_search",
+                    "vector_candidates": len(candidates),
+                    "keyword_candidates": 0,
+                    "candidates": candidates,
+                }
+        except Exception:
+            pass
+
+    product_chunks = [
+        row
+        for row in chatbot_repository.get_chunks(include_embeddings=False)
+        if str((row.get("metadata") or {}).get("doc_type")) == "product"
+    ]
+    collapsed_rows = _collapse_kb_product_chunks(product_chunks)
+    filtered_rows = [
+        row
+        for row in collapsed_rows
+        if (
+            _matches_explicit_device_category(row, explicit_category)
+            if explicit_category
+            else _matches_any_hint(
+            {
+                "product_name": row.get("title"),
+                "catalog_name": "",
+                "product_description": row.get("content"),
+                "catalog_description": "",
+                "brand_name": (row.get("metadata") or {}).get("brand"),
+                "category_name": (row.get("metadata") or {}).get("category"),
+            },
+            category_hints,
+            )
+        )
+    ]
+    if not filtered_rows:
+        filtered_rows = collapsed_rows
+    filtered_rows = [
+        row
+        for row in filtered_rows
+        if _matches_terms(
+            {
+                "product_name": row.get("title"),
+                "catalog_name": "",
+                "product_description": row.get("content"),
+                "catalog_description": "",
+                "brand_name": (row.get("metadata") or {}).get("brand"),
+                "category_name": (row.get("metadata") or {}).get("category"),
+            },
+            terms,
+        )
+    ] or filtered_rows
+    filtered_rows = [row for row in filtered_rows if _price_matches(row)]
+    sorted_rows = sorted(
+        filtered_rows,
+        key=lambda item: (
+            int((item.get("metadata") or {}).get("buyturn") or 0),
+            int((item.get("metadata") or {}).get("price_vnd") or 0) > 0,
+        ),
+        reverse=True,
+    )[:capped_limit]
+    max_buyturn = max(
+        [int((item.get("metadata") or {}).get("buyturn") or 0) for item in sorted_rows] or [1]
+    )
+    candidates = [
+        _to_top_selling_candidate(
+            row,
+            max_buyturn=max_buyturn,
+            source="kb_product_search_fallback",
+        )
+        for row in sorted_rows
+    ]
+    return {
+        "retrieval_backend": "kb_product_search_fallback",
+        "vector_candidates": len(candidates),
+        "keyword_candidates": 0,
+        "candidates": candidates,
     }
 
 

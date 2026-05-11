@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-"""Gemini embedding provider wrapper."""
+"""Vertex AI embedding provider wrapper."""
 
 from time import perf_counter
 
-import httpx
+from google.genai import types
 
 from app.config import settings
+from app.providers.vertex_client import build_vertex_client
+from app.providers.vertex_client import require_vertex_configuration
 
 
 def _require_embedding_configuration() -> None:
@@ -16,41 +18,36 @@ def _require_embedding_configuration() -> None:
         raise RuntimeError(
             "Gemini embedding is disabled. Set ENABLE_GEMINI_EMBED=true in .env."
         )
-    if not settings.gemini_api_key:
-        raise RuntimeError("GEMINI_API_KEY is required for Gemini embeddings.")
+    require_vertex_configuration()
 
 
 async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> dict:
-    """Create one Gemini embedding vector for the given text payload."""
+    """Create one Vertex AI embedding vector for the given text payload."""
 
     started = perf_counter()
     _require_embedding_configuration()
 
-    model = settings.gemini_embed_model
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model}:embedContent?key={settings.gemini_api_key}"
-    )
-    payload = {
-        "model": f"models/{model}",
-        "content": {"parts": [{"text": text}]},
-        "taskType": task_type,
-    }
-
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
+        client = build_vertex_client()
+        response = await client.aio.models.embed_content(
+            model=settings.gemini_embed_model,
+            contents=text,
+            config=types.EmbedContentConfig(
+                task_type=task_type,
+                output_dimensionality=settings.embedding_dimensions,
+            ),
+        )
+        await client.aio.aclose()
     except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"Gemini embedding request failed: {exc}") from exc
+        raise RuntimeError(f"Vertex AI embedding request failed: {exc}") from exc
 
-    values = data.get("embedding", {}).get("values", [])
+    embeddings = list(response.embeddings or [])
+    values = list(embeddings[0].values or []) if embeddings else []
     if not values:
-        raise RuntimeError("Gemini embedding response was empty.")
+        raise RuntimeError("Vertex AI embedding response was empty.")
 
     return {
         "vector": [float(item) for item in values],
-        "provider": "gemini",
+        "provider": "vertex_ai",
         "latency_ms": round((perf_counter() - started) * 1000, 2),
     }

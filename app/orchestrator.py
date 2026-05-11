@@ -7,12 +7,18 @@ import unicodedata
 from time import perf_counter
 
 from app.config import settings
+from app.intent_router import build_budget_request
+from app.intent_router import classify_intent
+from app.intent_router import derive_shopping_category_from_message
+from app.intent_router import message_blocks_build_pc_history_fallback
 from app.providers.embedding import embed_text
 from app.providers.generation import generate_answer
 from app.query_rewrite import rewrite_query
 from app.reranker import rerank
 from app.retriever import retrieve
+from app.repository import chatbot_repository
 from app.source_sync import get_build_pc_candidates
+from app.source_sync import get_product_search_candidates
 from app.source_sync import get_top_selling_candidates
 
 BUILD_PC_REQUIRED_ROLES = ("cpu", "gpu", "motherboard", "ram", "ssd", "psu", "case")
@@ -250,6 +256,328 @@ def _candidate_score(item: dict) -> float:
     return float(item.get("rerank_score", item.get("retrieval_score", 0.0)) or 0.0)
 
 
+def _candidate_product_id(item: dict) -> int:
+    """Extract stable product id from candidate metadata or URI."""
+
+    metadata = dict(item.get("metadata") or {})
+    try:
+        product_id = int(metadata.get("product_id") or 0)
+    except (TypeError, ValueError):
+        product_id = 0
+    if product_id > 0:
+        return product_id
+    match = re.search(r"/products/(\d+)", str(item.get("uri") or ""))
+    return int(match.group(1)) if match else 0
+
+
+def _dedupe_candidates_by_product(candidates: list[dict], limit: int | None = None) -> list[dict]:
+    """Keep only the strongest candidate for each product id to avoid repeated products."""
+
+    if not candidates:
+        return []
+
+    deduped: list[dict] = []
+    seen_products: set[int] = set()
+    seen_chunks: set[str] = set()
+    for item in sorted(candidates, key=_candidate_score, reverse=True):
+        chunk_id = str(item.get("chunk_id") or "")
+        if chunk_id and chunk_id in seen_chunks:
+            continue
+        product_id = _candidate_product_id(item)
+        if product_id > 0:
+            if product_id in seen_products:
+                continue
+            seen_products.add(product_id)
+        if chunk_id:
+            seen_chunks.add(chunk_id)
+        deduped.append(item)
+        if limit and len(deduped) >= max(1, int(limit)):
+            break
+    return deduped
+
+
+_STRICT_SHOPPING_CATEGORIES = frozenset({"laptop", "phone", "tablet", "pc"})
+
+
+def _category_signals_device_accessory(normalized_cat: str, device: str) -> bool:
+    """Heuristic: category path/name is for accessories/peripherals, not the device itself."""
+
+    common = (
+        "phu kien",
+        "accessories",
+        "accessory",
+        "usb",
+        "hub",
+        "hub usb",
+        "dock",
+        "docking",
+        "cap sac",
+        "cu sac",
+        "sac du phong",
+        "sac nhanh",
+        "day cap",
+        "cap ket noi",
+        "type c hub",
+        "multiport",
+        "chuot",
+        "mouse",
+        "ban phim",
+        "keyboard",
+        "tai nghe",
+        "headphone",
+        "loa bluetooth",
+        "speaker",
+        "o cung ngoai",
+        "external",
+        "hdd box",
+        "card mang",
+        "network card",
+        "router wifi",
+        "switch mang",
+        "gia do",
+        "gia treo",
+        "stand",
+        "nem ban phim",
+        "tan nhiet",
+        "keo tan nhiet",
+        "chuyen doi",
+        "bo chuyen",
+        "adapter",
+    )
+    if device == "laptop":
+        extra = (
+            "op lung",
+            "bao da",
+            "op macbook",
+            "mieng dan",
+            "kinh cuong luc",
+            "balo",
+            "tui chong soc",
+        )
+    elif device == "phone":
+        extra = (
+            "op lung",
+            "bao da",
+            "mieng dan",
+            "kinh cuong luc",
+            "mieng dan cuong luc",
+        )
+    elif device == "tablet":
+        extra = (
+            "op lung",
+            "bao da",
+            "but cam ung",
+            "stylus",
+            "mieng dan",
+        )
+    else:
+        extra = ()
+    return any(marker in normalized_cat for marker in common + extra)
+
+
+def _metadata_matches_shopping_category(
+    category_text: str,
+    wanted: str,
+    category_slug: str | None = None,
+) -> bool:
+    """Match KB catalog category (+ optional product_categories.slug) to shopper intent."""
+
+    slug = _normalize(str(category_slug or "").replace("-", " "))
+    cat = _normalize(str(category_text or ""))
+    merged = f"{cat} {slug}".strip()
+    if not merged:
+        return False
+    wanted_norm = _normalize(str(wanted or ""))
+    if not wanted_norm:
+        return False
+
+    if wanted_norm == "laptop":
+        if _category_signals_device_accessory(merged, "laptop"):
+            return False
+        return any(
+            marker in merged
+            for marker in (
+                "laptop",
+                "notebook",
+                "macbook",
+                "xach tay",
+                "mtxt",
+                "may tinh xach tay",
+            )
+        )
+
+    if wanted_norm == "phone":
+        if _category_signals_device_accessory(merged, "phone"):
+            return False
+        return any(
+            marker in merged
+            for marker in (
+                "dien thoai",
+                "smartphone",
+                "iphone",
+                "android",
+                "mobile",
+            )
+        )
+
+    if wanted_norm == "tablet":
+        if _category_signals_device_accessory(merged, "tablet"):
+            return False
+        return any(marker in merged for marker in ("tablet", "ipad"))
+
+    if wanted_norm == "pc":
+        if any(marker in merged for marker in ("laptop", "notebook", "macbook", "xach tay", "mtxt")):
+            return False
+        if _category_signals_device_accessory(merged, "pc"):
+            return False
+        return any(
+            marker in merged
+            for marker in (
+                "pc",
+                "may tinh de ban",
+                "desktop",
+                "bo may tinh",
+                "computer",
+                "linh kien",
+                "cpu",
+                "vga",
+                "mainboard",
+            )
+        )
+
+    return wanted_norm in merged
+
+
+def _filter_product_candidates(
+    candidates: list[dict],
+    category: str | None,
+    budget_vnd: int | None,
+    budget_mode: str | None,
+) -> list[dict]:
+    """Filter product candidates by explicit category and budget constraints."""
+
+    if not candidates:
+        return []
+
+    normalized_category = _normalize(str(category or ""))
+    if not normalized_category and not (budget_vnd and budget_vnd > 0):
+        return candidates
+
+    def _matches_category(item: dict) -> bool:
+        if not normalized_category:
+            return True
+        metadata = dict(item.get("metadata") or {})
+        raw_category = str(metadata.get("category") or "")
+        if normalized_category in _STRICT_SHOPPING_CATEGORIES:
+            return _metadata_matches_shopping_category(
+                raw_category,
+                normalized_category,
+                str(metadata.get("category_slug") or "") or None,
+            )
+        category_text = _normalize(raw_category)
+        if category_text and normalized_category in category_text:
+            return True
+        blob = _normalize(" ".join([str(item.get("title") or ""), str(item.get("content") or "")]))
+        return normalized_category in blob
+
+    def _matches_budget(item: dict) -> bool:
+        if not budget_vnd or budget_vnd <= 0:
+            return True
+        price_vnd = _resolve_candidate_price_vnd(item)
+        if price_vnd <= 0:
+            return True
+        mode = str(budget_mode or "").strip().lower() or "target"
+        if mode == "lower":
+            return price_vnd >= budget_vnd
+        # "upper" and "target": treat as max-cap for phrases like "dưới X".
+        return price_vnd <= budget_vnd
+
+    filtered: list[dict] = []
+    for item in candidates:
+        metadata = dict(item.get("metadata") or {})
+        if str(metadata.get("doc_type") or "") != "product":
+            continue
+        if not _matches_category(item):
+            continue
+        if not _matches_budget(item):
+            continue
+        filtered.append(item)
+
+    return filtered
+
+
+def _keyword_hit_ratio(query: str, content: str) -> float:
+    """Simple token hit ratio used for category/budget fallback."""
+
+    terms = [t for t in _normalize(query).split() if t]
+    if not terms:
+        return 0.0
+    hay = _normalize(content)
+    hits = sum(1 for term in set(terms) if term in hay)
+    return hits / len(set(terms))
+
+
+def _category_budget_fallback_candidates(
+    query: str,
+    category: str,
+    budget_vnd: int,
+    budget_mode: str | None,
+    limit: int = 60,
+) -> list[dict]:
+    """Fallback retrieval: pick product chunks by metadata category + budget."""
+
+    normalized_category = _normalize(category)
+    if not normalized_category:
+        return []
+    budget = max(int(budget_vnd), 0)
+    mode = str(budget_mode or "").strip().lower() or "upper"
+
+    rows = []
+    for chunk in chatbot_repository.get_chunks(include_embeddings=False):
+        metadata = dict(chunk.get("metadata") or {})
+        if str(metadata.get("doc_type") or "") != "product":
+            continue
+        if not _metadata_matches_shopping_category(
+            str(metadata.get("category") or ""),
+            category,
+            str(metadata.get("category_slug") or "") or None,
+        ):
+            continue
+        price = _resolve_candidate_price_vnd(chunk)
+        if budget > 0 and price > 0:
+            if mode == "lower" and price < budget:
+                continue
+            if mode != "lower" and price > budget:
+                continue
+        buyturn = 0
+        try:
+            buyturn = int(metadata.get("buyturn") or 0)
+        except (TypeError, ValueError):
+            buyturn = 0
+        keyword = _keyword_hit_ratio(query, str(chunk.get("title") or "") + " " + str(chunk.get("content") or ""))
+        score = keyword * 0.7 + min(buyturn / 500.0, 1.0) * 0.3
+        rows.append({**chunk, "semantic_score": 0.0, "keyword_score": keyword, "retrieval_score": score})
+
+    rows.sort(key=lambda item: float(item.get("retrieval_score") or 0.0), reverse=True)
+    return rows[: max(1, int(limit))]
+
+
+def _looks_insufficient_answer(text: str) -> bool:
+    """Detect generic insufficient-context responses for guarded retry."""
+
+    normalized = _normalize(str(text or ""))
+    if not normalized:
+        return True
+    markers = [
+        "khong du du lieu",
+        "khong du thong tin",
+        "khong tim thay",
+        "context khong du",
+        "insufficient",
+    ]
+    return any(marker in normalized for marker in markers)
+
+
 def _ensure_build_pc_role_coverage(candidates: list[dict], limit: int) -> list[dict]:
     """Select contexts while ensuring at least one candidate for each PC role."""
 
@@ -292,6 +620,53 @@ def _resolve_candidate_price_vnd(item: dict) -> int:
     except (TypeError, ValueError):
         value = 0
     return value if value > 0 else 0
+
+
+def _build_shopping_generation_query(message: str) -> str:
+    """Inject strict output constraints for product recommendation responses."""
+
+    return "\n".join(
+        [
+            message,
+            "",
+            "SHOPPING_RULES:",
+            "- Day la danh sach ung vien tu kho tri thuc (contexts). Neu contexts khong rong, bat buoc de xuat it nhat 3 lua chon tu contexts neu co du san pham phan biet.",
+            "- Moi san pham chi duoc xuat hien toi da 1 lan. Khong lap lai cung title hoac uri.",
+            "- Neu co gia trong contexts, hay ghi gia (VND) va ly do ngan gon cho tung lua chon.",
+            "- Khong duoc yeu cau nguoi dung cung cap gia neu gia da co trong contexts.",
+            "- Neu nguoi dung hoi laptop/dien thoai/may tinh bang, khong duoc de xuat phu kien neu do khong phai thiet bi do.",
+            "- Neu that su contexts khong co san pham phu hop, hay noi ro 'khong du du lieu trong kho tri thuc' va goi y tu khoa can them.",
+            "- Tra loi tieng Viet co dau.",
+        ]
+    )
+
+
+def _build_shopping_retry_query(message: str, ranked: list[dict]) -> str:
+    """Build a stricter retry prompt when model refuses despite having candidates."""
+
+    candidates = []
+    for item in ranked[:8]:
+        title = str(item.get("title") or "Untitled")
+        uri = str(item.get("uri") or "")
+        price = _resolve_candidate_price_vnd(item)
+        price_text = _format_vnd(price) if price > 0 else "N/A"
+        candidates.append(f"- {title} | gia={price_text} | uri={uri}")
+    return "\n".join(
+        [
+            message,
+            "",
+            "RETRY_RULES:",
+            "- Contexts da co ung vien. Khong duoc tu choi vi thieu boi canh neu da co san pham.",
+            "- Moi san pham chi duoc xuat hien toi da 1 lan.",
+            "- Bat buoc chon it nhat 1 san pham tu danh sach ung vien ben duoi neu danh sach khong rong.",
+            "- Neu co tu 2 hoac 3 ung vien, hay tra ra dung so ung vien dang co.",
+            "- Neu gia N/A, van co the de xuat va ghi ro 'chua co gia trong du lieu'.",
+            "- Tra loi tieng Viet co dau.",
+            "",
+            "UNG_VIEN:",
+            *candidates,
+        ]
+    )
 
 
 def _find_budget_valid_build(
@@ -355,16 +730,76 @@ async def run_rag_pipeline(message: str, locale: str, history: list[dict]) -> di
     """Execute full RAG flow for a user message."""
 
     started = perf_counter()
+    route = await classify_intent(message, history)
+    if route.intent == "build_pc" and message_blocks_build_pc_history_fallback(message):
+        # Vertex or older rules can still label "laptop … triệu" as build_pc; never run 7-part desktop flow.
+        route = route.model_copy(
+            update={
+                "intent": "general",
+                "category": derive_shopping_category_from_message(message) or route.category,
+                "confidence": min(route.confidence, 0.65),
+                "source": "portable_device_guard",
+                "rationale": (route.rationale or "build_pc") + "|portable_override",
+            }
+        )
+    route_debug = route.model_dump()
 
     # Stage 1: query rewrite to improve recall.
-    rewrites = rewrite_query(message, history)
+    rewrites = rewrite_query(message, history, route)
 
     # Stage 2A: intent route for build-pc with strict budget constraints.
-    if _is_build_pc_intent(message):
-        budget_vnd = _parse_budget_vnd(message)
+    budget_request = None
+    if route.budget_vnd:
+        budget_request = build_budget_request(
+            route.budget_vnd,
+            route.budget_mode or "target",
+        )
+    else:
+        budget_request = _parse_budget_request(message)
+
+    use_build_route = route.intent == "build_pc"
+    if not use_build_route and not message_blocks_build_pc_history_fallback(message):
+        fallback_build_route, fallback_budget_request = _should_use_build_pc_route(message, history)
+        if fallback_build_route:
+            use_build_route = True
+            if fallback_budget_request:
+                budget_request = fallback_budget_request
+
+    if use_build_route:
+        budget_vnd = int((budget_request or {}).get("budget_vnd") or 0)
+        if budget_vnd <= 0:
+            return {
+                "answer": (
+                    "Bạn muốn build PC theo ngân sách bao nhiêu? Ví dụ: 20 triệu, 25 củ hoặc dưới 30 triệu."
+                ),
+                "confidence": 0.35,
+                "citations": [],
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "latency_ms": round((perf_counter() - started) * 1000, 2),
+                    "stage_latency_ms": {
+                        "embed": 0.0,
+                        "retrieve": 0.0,
+                        "rerank": 0.0,
+                        "generate": 0.0,
+                    },
+                    "providers": {
+                        "embedding": "intent_route",
+                        "generation": "guardrail",
+                        "retrieval": "none",
+                    },
+                },
+                "debug": {
+                    "rewritten_queries": rewrites,
+                    "intent_route": "build_pc_budget",
+                    "intent_router": route_debug,
+                    "selected_chunks": [],
+                },
+            }
         if budget_vnd:
-            min_budget = int(round(budget_vnd * 0.95))
-            max_budget = int(round(budget_vnd * 1.05))
+            min_budget = int((budget_request or {}).get("min_budget") or round(budget_vnd * 0.95))
+            max_budget = int((budget_request or {}).get("max_budget") or round(budget_vnd * 1.05))
             retrieve_started = perf_counter()
             retrieval = get_build_pc_candidates(
                 query=message,
@@ -402,6 +837,7 @@ async def run_rag_pipeline(message: str, locale: str, history: list[dict]) -> di
                         "keyword_candidates": retrieval["keyword_candidates"],
                         "retrieval_backend": retrieval["retrieval_backend"],
                         "intent_route": "build_pc_budget",
+                        "intent_router": route_debug,
                         "budget_vnd": budget_vnd,
                         "budget_range": {
                             "min": min_budget,
@@ -454,6 +890,7 @@ async def run_rag_pipeline(message: str, locale: str, history: list[dict]) -> di
                         "keyword_candidates": retrieval["keyword_candidates"],
                         "retrieval_backend": retrieval["retrieval_backend"],
                         "intent_route": "build_pc_budget",
+                        "intent_router": route_debug,
                         "budget_vnd": budget_vnd,
                         "budget_range": {
                             "min": min_budget,
@@ -500,6 +937,7 @@ async def run_rag_pipeline(message: str, locale: str, history: list[dict]) -> di
                         "keyword_candidates": retrieval["keyword_candidates"],
                         "retrieval_backend": retrieval["retrieval_backend"],
                         "intent_route": "build_pc_budget",
+                        "intent_router": route_debug,
                         "budget_vnd": budget_vnd,
                         "budget_range": {
                             "min": min_budget,
@@ -569,6 +1007,7 @@ async def run_rag_pipeline(message: str, locale: str, history: list[dict]) -> di
                     "keyword_candidates": retrieval["keyword_candidates"],
                     "retrieval_backend": retrieval["retrieval_backend"],
                     "intent_route": "build_pc_budget",
+                    "intent_router": route_debug,
                     "budget_vnd": budget_vnd,
                     "budget_range": {
                         "min": min_budget,
@@ -583,20 +1022,108 @@ async def run_rag_pipeline(message: str, locale: str, history: list[dict]) -> di
             }
 
     # Stage 2B: intent route for top-selling list requests.
-    if _is_top_selling_intent(message):
+    if route.intent == "product_search":
+        retrieve_started = perf_counter()
+        retrieval = get_product_search_candidates(
+            query=message,
+            category=str(route.category or ""),
+            budget_vnd=route.budget_vnd,
+            budget_mode=route.budget_mode,
+            limit=max(settings.rag_topk_rerank * 2, 12),
+        )
+        retrieve_ms = round((perf_counter() - retrieve_started) * 1000, 2)
+        distinct_candidates = _dedupe_candidates_by_product(
+            retrieval["candidates"],
+            limit=max(settings.rag_topk_rerank * 2, 12),
+        )
+        if distinct_candidates:
+            rerank_started = perf_counter()
+            ranked = rerank(message, distinct_candidates, max(settings.rag_topk_rerank * 2, 12))
+            ranked = _dedupe_candidates_by_product(ranked, limit=max(settings.rag_topk_rerank, 6))
+            rerank_ms = round((perf_counter() - rerank_started) * 1000, 2)
+
+            generation_started = perf_counter()
+            generation = await generate_answer(
+                _build_shopping_generation_query(message),
+                locale,
+                ranked,
+            )
+            if ranked and _looks_insufficient_answer(str(generation.get("answer") or "")):
+                generation = await generate_answer(
+                    _build_shopping_retry_query(message, ranked),
+                    locale,
+                    ranked,
+                )
+            generate_ms = round((perf_counter() - generation_started) * 1000, 2)
+
+            citations = [
+                {
+                    "index": index,
+                    "chunk_id": item["chunk_id"],
+                    "title": item["title"],
+                    "uri": item["uri"],
+                    "score": float(item["rerank_score"]),
+                }
+                for index, item in enumerate(ranked, start=1)
+            ]
+
+            return {
+                "answer": generation["answer"],
+                "confidence": float(generation["confidence"]),
+                "citations": citations,
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "latency_ms": round((perf_counter() - started) * 1000, 2),
+                    "stage_latency_ms": {
+                        "embed": 0.0,
+                        "retrieve": retrieve_ms,
+                        "rerank": rerank_ms,
+                        "generate": generate_ms,
+                    },
+                    "providers": {
+                        "embedding": "intent_route",
+                        "generation": generation["provider"],
+                        "retrieval": retrieval["retrieval_backend"],
+                    },
+                },
+                "debug": {
+                    "rewritten_queries": rewrites,
+                    "vector_candidates": retrieval["vector_candidates"],
+                    "keyword_candidates": retrieval["keyword_candidates"],
+                    "retrieval_backend": retrieval["retrieval_backend"],
+                    "intent_route": "product_search",
+                    "intent_router": route_debug,
+                    "selected_chunks": [item["chunk_id"] for item in ranked],
+                    "distinct_products": [_candidate_product_id(item) for item in ranked],
+                },
+            }
+
+    if route.intent == "top_selling" or _is_top_selling_intent(message):
         retrieve_started = perf_counter()
         retrieval = get_top_selling_candidates(
             query=message,
             limit=max(settings.rag_topk_rerank, 8),
         )
         retrieve_ms = round((perf_counter() - retrieve_started) * 1000, 2)
-        if retrieval["candidates"]:
+        distinct_candidates = _dedupe_candidates_by_product(
+            retrieval["candidates"],
+            limit=max(settings.rag_topk_rerank * 2, 10),
+        )
+        if distinct_candidates:
             rerank_started = perf_counter()
-            ranked = rerank(message, retrieval["candidates"], settings.rag_topk_rerank)
+            ranked = rerank(message, distinct_candidates, max(settings.rag_topk_rerank * 2, 10))
+            ranked = _dedupe_candidates_by_product(ranked, limit=max(settings.rag_topk_rerank, 5))
             rerank_ms = round((perf_counter() - rerank_started) * 1000, 2)
 
             generation_started = perf_counter()
-            generation = await generate_answer(message, locale, ranked)
+            generation = await generate_answer(_build_shopping_generation_query(message), locale, ranked)
+            if ranked and _looks_insufficient_answer(str(generation.get("answer") or "")):
+                generation = await generate_answer(
+                    _build_shopping_retry_query(message, ranked),
+                    locale,
+                    ranked,
+                )
             generate_ms = round((perf_counter() - generation_started) * 1000, 2)
 
             citations = [
@@ -636,7 +1163,9 @@ async def run_rag_pipeline(message: str, locale: str, history: list[dict]) -> di
                     "keyword_candidates": retrieval["keyword_candidates"],
                     "retrieval_backend": retrieval["retrieval_backend"],
                     "intent_route": "top_selling",
+                    "intent_router": route_debug,
                     "selected_chunks": [item["chunk_id"] for item in ranked],
+                    "distinct_products": [_candidate_product_id(item) for item in ranked],
                 },
             }
 
@@ -657,18 +1186,49 @@ async def run_rag_pipeline(message: str, locale: str, history: list[dict]) -> di
 
     candidates_for_rerank = retrieval["candidates"]
     policy_priority_applied = False
-    if _is_policy_intent(message):
+    if route.intent == "policy" or _is_policy_intent(message):
         policy_candidates = _select_policy_candidates(retrieval["candidates"])
         if policy_candidates:
             candidates_for_rerank = policy_candidates
             policy_priority_applied = True
+    elif route.category and route.budget_vnd:
+        filtered = _filter_product_candidates(
+            retrieval["candidates"],
+            category=route.category,
+            budget_vnd=route.budget_vnd,
+            budget_mode=route.budget_mode,
+        )
+        if filtered:
+            candidates_for_rerank = filtered
+        else:
+            fallback_rows = _category_budget_fallback_candidates(
+                message,
+                category=str(route.category),
+                budget_vnd=int(route.budget_vnd),
+                budget_mode=route.budget_mode,
+                limit=max(settings.rag_topk_vector, settings.rag_topk_keyword, 60),
+            )
+            candidates_for_rerank = fallback_rows
+        candidates_for_rerank = _dedupe_candidates_by_product(
+            candidates_for_rerank,
+            limit=max(settings.rag_topk_rerank * 2, 12),
+        )
 
     rerank_started = perf_counter()
     ranked = rerank(message, candidates_for_rerank, settings.rag_topk_rerank)
+    if route.intent == "general" and route.category:
+        ranked = _dedupe_candidates_by_product(ranked, limit=settings.rag_topk_rerank)
     rerank_ms = round((perf_counter() - rerank_started) * 1000, 2)
 
     generation_started = perf_counter()
-    generation = await generate_answer(message, locale, ranked)
+    generation_query = message
+    if route.intent == "general" and route.category and route.budget_vnd:
+        generation_query = _build_shopping_generation_query(message)
+    generation = await generate_answer(generation_query, locale, ranked)
+    if route.intent == "general" and route.category and route.budget_vnd and ranked and _looks_insufficient_answer(
+        str(generation.get("answer") or "")
+    ):
+        generation = await generate_answer(_build_shopping_retry_query(message, ranked), locale, ranked)
     generate_ms = round((perf_counter() - generation_started) * 1000, 2)
 
     citations = [
@@ -708,6 +1268,12 @@ async def run_rag_pipeline(message: str, locale: str, history: list[dict]) -> di
             "keyword_candidates": retrieval["keyword_candidates"],
             "retrieval_backend": retrieval["retrieval_backend"],
             "intent_route": "policy_priority" if policy_priority_applied else "default",
+            "intent_router": route_debug,
             "selected_chunks": [item["chunk_id"] for item in ranked],
+            "distinct_products": [
+                product_id
+                for product_id in (_candidate_product_id(item) for item in ranked)
+                if product_id > 0
+            ],
         },
     }

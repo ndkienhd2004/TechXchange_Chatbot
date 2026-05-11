@@ -107,6 +107,15 @@ class Settings:
     )
     enable_gemini_chat: bool = _to_bool(os.getenv("ENABLE_GEMINI_CHAT"), False)
     enable_gemini_embed: bool = _to_bool(os.getenv("ENABLE_GEMINI_EMBED"), False)
+    google_genai_use_vertexai: bool = _to_bool(
+        os.getenv("GOOGLE_GENAI_USE_VERTEXAI"),
+        False,
+    )
+    google_cloud_project: str = _env_str("GOOGLE_CLOUD_PROJECT", "")
+    google_cloud_location: str = _env_str("GOOGLE_CLOUD_LOCATION", "us-central1")
+    enable_intent_router: bool = _to_bool(os.getenv("ENABLE_INTENT_ROUTER"), True)
+    intent_model: str = _env_str("INTENT_MODEL", "gemini-2.5-flash")
+    intent_min_confidence: float = _to_float(os.getenv("INTENT_MIN_CONFIDENCE"), 0.7)
 
     # Background sync scheduling.
     sync_enabled: bool = _to_bool(os.getenv("SYNC_ENABLED"), True)

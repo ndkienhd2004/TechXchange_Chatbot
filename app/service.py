@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 from typing import Optional
+from uuid import uuid4
 
 from app.config import settings
 from app.orchestrator import run_rag_pipeline
@@ -47,6 +48,7 @@ class AssistantService:
             )
             conversation_id = conversation.id
 
+        request_id = uuid4().hex
         app_message_repository.append_message(conversation_id, "user", content)
         history = app_message_repository.get_history(conversation_id, limit=10)
 
@@ -54,6 +56,15 @@ class AssistantService:
             run_rag_pipeline(content, locale, history),
             timeout=settings.assistant_timeout_ms,
         )
+        rag_result.setdefault("usage", {})
+        rag_result.setdefault("debug", {})
+        rag_result["usage"]["request_id"] = request_id
+        rag_result["usage"]["conversation_id"] = conversation_id
+        rag_result["usage"]["locale"] = locale
+        debug = dict(rag_result.get("debug") or {})
+        rag_result["usage"]["route"] = debug.get("intent_route")
+        rag_result["usage"]["retrieval_backend"] = debug.get("retrieval_backend")
+        rag_result["debug"]["request_id"] = request_id
 
         assistant_message = app_message_repository.append_message(
             conversation_id,
@@ -94,17 +105,23 @@ class AssistantService:
 
         app_database_backend = settings.app_database_url.split(":", 1)[0]
         chatbot_database_backend = settings.chatbot_database_url.split(":", 1)[0]
-        api_key_configured = bool(settings.gemini_api_key)
+        vertex_ready = bool(
+            settings.google_genai_use_vertexai
+            and settings.google_cloud_project
+            and settings.google_cloud_location
+        )
         return {
             "status": "ok",
             "app_database_backend": app_database_backend,
             "chatbot_database_backend": chatbot_database_backend,
             "providers": {
-                "gemini_api_key_configured": api_key_configured,
+                "vertex_ai_enabled": settings.google_genai_use_vertexai,
+                "google_cloud_project": settings.google_cloud_project,
+                "google_cloud_location": settings.google_cloud_location,
                 "gemini_chat_enabled": settings.enable_gemini_chat,
                 "gemini_embed_enabled": settings.enable_gemini_embed,
-                "generation_ready": api_key_configured and settings.enable_gemini_chat,
-                "embedding_ready": api_key_configured and settings.enable_gemini_embed,
+                "generation_ready": vertex_ready and settings.enable_gemini_chat,
+                "embedding_ready": vertex_ready and settings.enable_gemini_embed,
             },
             "knowledge": chatbot_repository.get_kb_stats(),
             "storage": chatbot_repository.get_storage_capabilities(),

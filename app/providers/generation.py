@@ -6,9 +6,11 @@ import json
 import re
 from time import perf_counter
 
-import httpx
+from google.genai import types
 
 from app.config import settings
+from app.providers.vertex_client import build_vertex_client
+from app.providers.vertex_client import require_vertex_configuration
 
 
 def _format_contexts(contexts: list[dict]) -> str:
@@ -60,8 +62,7 @@ def _require_generation_configuration() -> None:
         raise RuntimeError(
             "Gemini generation is disabled. Set ENABLE_GEMINI_CHAT=true in .env."
         )
-    if not settings.gemini_api_key:
-        raise RuntimeError("GEMINI_API_KEY is required for Gemini generation.")
+    require_vertex_configuration()
 
 
 def _extract_first_candidate_text(data: dict) -> str:
@@ -169,37 +170,24 @@ async def generate_answer(query: str, locale: str, contexts: list[dict]) -> dict
 
     _require_generation_configuration()
 
-    model = settings.gemini_chat_model
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model}:generateContent?key={settings.gemini_api_key}"
-    )
-    payload = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [{"text": _build_prompt(query, locale, contexts)}],
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.2,
-            "maxOutputTokens": 600,
-            # Reduce hidden reasoning token usage so visible answer is not truncated.
-            "thinkingConfig": {"thinkingBudget": 0},
-        },
-    }
-
     try:
-        async with httpx.AsyncClient(timeout=25.0) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
+        client = build_vertex_client()
+        response = await client.aio.models.generate_content(
+            model=settings.gemini_chat_model,
+            contents=_build_prompt(query, locale, contexts),
+            config=types.GenerateContentConfig(
+                temperature=0.2,
+                max_output_tokens=1000,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
+        )
+        text = (response.text or "").strip()
+        await client.aio.aclose()
     except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"Gemini generation request failed: {exc}") from exc
+        raise RuntimeError(f"Vertex AI generation request failed: {exc}") from exc
 
-    text = _extract_first_candidate_text(data)
     if not text:
-        raise RuntimeError("Gemini generation response was empty.")
+        raise RuntimeError("Vertex AI generation response was empty.")
 
     cleaned_text = _extract_json_text(text)
     parsed: dict | None = None
@@ -234,6 +222,6 @@ async def generate_answer(query: str, locale: str, contexts: list[dict]) -> dict
         "answer": answer,
         "confidence": confidence,
         "citation_indexes": citation_indexes,
-        "provider": "gemini",
+        "provider": "vertex_ai",
         "latency_ms": round((perf_counter() - started) * 1000, 2),
     }
