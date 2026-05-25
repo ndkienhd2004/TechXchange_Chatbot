@@ -204,13 +204,13 @@ PC_ROLE_KEYWORDS: dict[str, tuple[list[str], list[str]]] = {
 # Prefer category-based role mapping to avoid misclassifying non-component products
 # (for example laptops mentioning CPU/GPU in specs).
 PC_ROLE_CATEGORY_KEYWORDS: dict[str, list[str]] = {
-    "cpu": ["cpu", "vi xu ly"],
-    "gpu": ["card do hoa", "vga", "card man hinh", "gpu"],
-    "motherboard": ["bo mach chu", "mainboard", "motherboard"],
-    "ram": ["ram", "memory"],
-    "ssd": ["ssd", "o cung trong", "nvme"],
-    "psu": ["nguon may tinh", "psu", "power supply"],
-    "case": ["vo case", "vo may", "chassis"],
+    "cpu": ["cpu", "vi xu ly", "bộ vi xu ly"],
+    "gpu": ["card do hoa", "vga", "card man hinh", "gpu", "card đồ họa", "card màn hình"],
+    "motherboard": ["bo mach chu", "mainboard", "motherboard", "bo mạch chủ"],
+    "ram": ["ram", "memory", "bo nho", "bộ nhớ"],
+    "ssd": ["ssd", "o cung trong", "nvme", "ổ cứng trong"],
+    "psu": ["nguon may tinh", "psu", "power supply", "nguon", "nguồn máy tính"],
+    "case": ["vo case", "vo may", "chassis", "vỏ case", "vỏ máy"],
 }
 
 PC_NON_BUILD_CATEGORY_KEYWORDS = {
@@ -232,6 +232,22 @@ PC_NON_BUILD_CATEGORY_KEYWORDS = {
     "bo dieu khien quat",
     "tan nhiet",
     "keo tan nhiet",
+}
+
+# Hard exclusion for full devices (not individual PC parts).
+PC_NON_COMPONENT_PRODUCT_KEYWORDS = {
+    "laptop",
+    "macbook",
+    "notebook",
+    "ultrabook",
+    "chromebook",
+    "imac",
+    "all in one",
+    "aio",
+    "mini pc",
+    "pc gaming",
+    "bo pc",
+    "desktop pc",
 }
 
 # Display labels used in final build-pc candidate content blocks.
@@ -507,6 +523,18 @@ def _match_pc_role(row: dict[str, Any]) -> str | None:
 
     slug_text = _normalize(str(row.get("category_slug") or "").replace("-", " "))
     category_text = _normalize(str(row.get("category_name") or ""))
+    product_text = _normalize(
+        " ".join(
+            [
+                str(row.get("product_name") or row.get("title") or ""),
+                str(row.get("product_description") or row.get("content") or ""),
+                str(row.get("catalog_description") or ""),
+            ]
+        )
+    )
+    if any(keyword in product_text for keyword in PC_NON_COMPONENT_PRODUCT_KEYWORDS):
+        return None
+
     merged_category = f"{category_text} {slug_text}".strip()
     if merged_category:
         if any(keyword in merged_category for keyword in PC_NON_BUILD_CATEGORY_KEYWORDS):
@@ -620,7 +648,8 @@ def _rank_pc_rows(
         price = _to_float(row.get("product_price") or row.get("price"))
         if price <= 0:
             continue
-        if price > budget_vnd * 0.9:
+        # Keep a broad price band so high-budget builds still have enough combinations.
+        if price > budget_vnd * 1.8:
             continue
         rating = _to_float(row.get("product_rating") or row.get("rating"))
         buyturn = int(row.get("buyturn") or 0)
@@ -1136,7 +1165,21 @@ def get_build_pc_candidates(
         for role in PC_ROLE_ORDER:
             ranked_rows = _rank_pc_rows(grouped[role], safe_budget, query_terms)
             if ranked_rows:
-                selected_rows[role] = ranked_rows[:safe_per_role]
+                top_by_score = ranked_rows[:safe_per_role]
+                top_by_price = sorted(ranked_rows, key=lambda item: _to_float(item.get("product_price")), reverse=True)[
+                    : max(1, safe_per_role // 2)
+                ]
+                merged: list[dict[str, Any]] = []
+                seen_ids: set[int] = set()
+                for row in [*top_by_score, *top_by_price]:
+                    product_id = int(row.get("product_id") or 0)
+                    if product_id in seen_ids:
+                        continue
+                    seen_ids.add(product_id)
+                    merged.append(row)
+                    if len(merged) >= safe_per_role:
+                        break
+                selected_rows[role] = merged
 
         if not all(selected_rows[role] for role in PC_ROLE_ORDER):
             return {
