@@ -4,6 +4,7 @@ from time import perf_counter
 
 from app.config import settings
 from app.budget_utils import format_vnd
+from app.build_pc_candidates import get_build_pc_candidates
 from app.shopping_filters import (
     build_citations,
     candidate_product_id,
@@ -12,7 +13,6 @@ from app.shopping_filters import (
 )
 from app.providers.generation import generate_answer
 from app.reranker import rerank
-from app.source_sync import get_build_pc_candidates
 
 BUILD_PC_REQUIRED_ROLES = ("cpu", "gpu", "motherboard", "ram", "ssd", "psu", "case")
 

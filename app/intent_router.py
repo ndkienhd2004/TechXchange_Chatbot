@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import unicodedata
 from typing import Any
 from typing import Optional
 
@@ -15,6 +14,7 @@ from pydantic import Field
 from app.config import settings
 from app.providers.vertex_client import build_vertex_client
 from app.providers.vertex_client import require_vertex_configuration
+from app.text_normalization import normalize as normalize_text
 
 ALLOWED_INTENTS = {"build_pc", "top_selling", "product_search", "policy", "general"}
 ALLOWED_BUDGET_MODES = {"target", "upper", "lower"}
@@ -128,21 +128,6 @@ def _looks_top_selling_query(normalized: str) -> bool:
     """Return True when query wording explicitly asks for best-selling items."""
 
     return any(marker in normalized for marker in TOP_SELLING_MARKERS)
-
-
-def strip_accents(text: str) -> str:
-    """Remove Vietnamese accents so matching works across typed variants."""
-
-    decomposed = unicodedata.normalize("NFD", str(text or ""))
-    stripped = "".join(ch for ch in decomposed if unicodedata.category(ch) != "Mn")
-    return stripped.replace("đ", "d").replace("Đ", "D")
-
-
-def normalize_text(text: str) -> str:
-    """Normalize text to lowercase alphanumeric tokens with single spaces."""
-
-    lowered = strip_accents(text).lower()
-    return " ".join("".join(ch if ch.isalnum() or ch.isspace() else " " for ch in lowered).split())
 
 
 def parse_budget_vnd(message: str) -> int | None:

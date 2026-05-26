@@ -30,6 +30,7 @@ from app.db import chatbot_engine
 from app.db import utcnow
 from app.knowledge_base import chunk_text
 from app.providers.embedding import embed_text
+from app.text_normalization import tokenize_text_preserve_accents
 
 
 def _parse_datetime(value: Any) -> Optional[datetime]:
@@ -86,11 +87,7 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
 def _terms(text: str) -> list[str]:
     """Tokenize string into lowercase alphanumeric terms."""
 
-    normalized = "".join(
-        char.lower() if char.isalnum() or char.isspace() else " "
-        for char in str(text or "")
-    )
-    return [token for token in normalized.split() if token]
+    return tokenize_text_preserve_accents(text)
 
 
 def _query_terms(queries: list[str], limit: int = 12) -> list[str]:

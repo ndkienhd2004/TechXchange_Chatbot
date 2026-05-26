@@ -5,16 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 from app.repository import chatbot_repository
+from app.text_normalization import normalize_preserve_accents
+from app.text_normalization import tokenize_text_preserve_accents
 
 
 def _tokenize_text(text: str) -> list[str]:
-    """Normalize text to simple lowercase alphanumeric tokens."""
+    """Backward-compatible wrapper around shared tokenizer."""
 
-    normalized = "".join(
-        char.lower() if char.isalnum() or char.isspace() else " "
-        for char in str(text or "")
-    )
-    return [token for token in normalized.split() if token]
+    return tokenize_text_preserve_accents(text)
 
 
 def _compute_keyword_overlap(query: str, content: str) -> float:
@@ -23,7 +21,7 @@ def _compute_keyword_overlap(query: str, content: str) -> float:
     query_terms = set(_tokenize_text(query))
     if not query_terms:
         return 0.0
-    haystack = content.lower()
+    haystack = normalize_preserve_accents(content)
     hit_count = sum(1 for term in query_terms if term in haystack)
     return hit_count / len(query_terms)
 

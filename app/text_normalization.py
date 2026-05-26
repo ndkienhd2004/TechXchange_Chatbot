@@ -14,6 +14,18 @@ def normalize(text: str) -> str:
     return " ".join("".join(ch if ch.isalnum() or ch.isspace() else " " for ch in lowered).split())
 
 
+def normalize_preserve_accents(text: str) -> str:
+    return " ".join("".join(ch.lower() if ch.isalnum() or ch.isspace() else " " for ch in str(text or "")).split())
+
+
+def tokenize_text(text: str) -> list[str]:
+    return [token for token in normalize(text).split() if token]
+
+
+def tokenize_text_preserve_accents(text: str) -> list[str]:
+    return [token for token in normalize_preserve_accents(text).split() if token]
+
+
 def is_top_selling_intent(message: str) -> bool:
     normalized = normalize(message)
     if not normalized:

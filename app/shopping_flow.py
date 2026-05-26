@@ -16,10 +16,11 @@ from app.shopping_filters import (
 )
 from app.providers.embedding import embed_text
 from app.providers.generation import generate_answer
+from app.product_search_candidates import get_product_search_candidates
 from app.reranker import rerank
 from app.retriever import retrieve
-from app.source_sync import get_product_search_candidates, get_top_selling_candidates
 from app.text_normalization import is_policy_intent, is_top_selling_intent
+from app.top_selling_candidates import get_top_selling_candidates
 
 
 async def handle_product_search_route(

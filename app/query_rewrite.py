@@ -2,24 +2,11 @@ from __future__ import annotations
 
 """Query rewriting utilities to improve retrieval recall."""
 
-import unicodedata
 from typing import Optional
 
 from app.intent_router import IntentRoute
-
-
-def _normalize(text: str) -> str:
-    """Lowercase and keep alphanumeric tokens with collapsed spaces."""
-
-    return " ".join("".join(ch.lower() if ch.isalnum() or ch.isspace() else " " for ch in text).split())
-
-
-def _strip_accents(text: str) -> str:
-    """Remove Vietnamese accents so matching works for both typed forms."""
-
-    decomposed = unicodedata.normalize("NFD", text)
-    stripped = "".join(ch for ch in decomposed if unicodedata.category(ch) != "Mn")
-    return stripped.replace("đ", "d").replace("Đ", "D")
+from app.text_normalization import normalize_preserve_accents as _normalize
+from app.text_normalization import strip_accents as _strip_accents
     
 
 def rewrite_query(
